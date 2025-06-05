@@ -22,55 +22,10 @@ local player   = Players.LocalPlayer
 local char     = player.Character or player.CharacterAdded:Wait()
 local hrp      = char:WaitForChild("HumanoidRootPart")
 local humanoid = char:WaitForChild("Humanoid")
-game:GetService("RunService"):Set3dRenderingEnabled(false)
 
--- Enable flying
-FLYING = true
-local iyflyspeed = 50
-local velocityHandlerName = "VelocityHandler"
-local gyroHandlerName = "GyroHandler"
-local mfly1, mfly2
-
-local function enableFlying()
-    local camera = Workspace.CurrentCamera
-    local v3inf = Vector3.new(9e9, 9e9, 9e9)
-    local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
-
-    local bv = Instance.new("BodyVelocity")
-    bv.Name = velocityHandlerName
-    bv.Parent = hrp
-    bv.MaxForce = v3inf
-    bv.Velocity = Vector3.new()
-
-    local bg = Instance.new("BodyGyro")
-    bg.Name = gyroHandlerName
-    bg.Parent = hrp
-    bg.MaxTorque = v3inf
-    bg.P = 1000
-    bg.D = 50
-
-    mfly1 = player.CharacterAdded:Connect(function()
-        bv.Parent = hrp
-        bg.Parent = hrp
-    end)
-
-    mfly2 = RunService.RenderStepped:Connect(function()
-        if FLYING then
-            local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-            local VelocityHandler = hrp:FindFirstChild(velocityHandlerName)
-            local GyroHandler = hrp:FindFirstChild(gyroHandlerName)
-            if humanoid and VelocityHandler and GyroHandler then
-                GyroHandler.CFrame = camera.CFrame
-                local direction = controlModule:GetMoveVector()
-                VelocityHandler.Velocity =
-                    (camera.CFrame.RightVector * direction.X * iyflyspeed) +
-                    (-camera.CFrame.LookVector * direction.Z * iyflyspeed)
-            end
-        end
-    end)
-end
-
-enableFlying()
+-- Remove white screen bug
+-- DO NOT disable 3D rendering; causes white screen
+-- game:GetService("RunService"):Set3dRenderingEnabled(false)
 
 -- Executor info
 local executor = "unknown"
@@ -105,7 +60,7 @@ do
         RemotePromiseMod = mod
     else
         hasPromise = false
-        warn("➳ Free Executor doesn't support RemotePromise, fallback mode")
+        warn("Free Executor doesn't support RemotePromise, using fallback")
     end
 end
 
@@ -126,7 +81,7 @@ else
     end
 end
 
--- Scan map and record bonds
+-- Bond collector
 local bondData = {}
 local seenKeys = {}
 
@@ -146,11 +101,75 @@ local function recordBonds()
     end
 end
 
+-- First lerp to chair
+local chair = Workspace:WaitForChild("RuntimeItems"):FindFirstChild("Chair")
+assert(chair and chair:FindFirstChild("Seat"), "Chair.Seat not found")
+local seat = chair.Seat
+
+-- Lerp to chair
+local steps = 50
+local start = hrp.Position
+local target = chair:GetPivot().Position + Vector3.new(0, 3, 0)
+for i = 1, steps do
+    local alpha = i / steps
+    hrp.CFrame = CFrame.new(start:Lerp(target, alpha))
+    task.wait(0.02)
+end
+
+-- Sit and weld
+seat:Sit(humanoid)
+task.wait(0.3)
+
+local weld = Instance.new("WeldConstraint", seat)
+weld.Part0 = seat
+weld.Part1 = hrp
+
+-- Enable flying
+FLYING = true
+local iyflyspeed = 50
+local velocityHandlerName = "VelocityHandler"
+local gyroHandlerName = "GyroHandler"
+
+local function enableFlying()
+    local camera = Workspace.CurrentCamera
+    local v3inf = Vector3.new(9e9, 9e9, 9e9)
+    local controlModule = require(player.PlayerScripts:WaitForChild("PlayerModule"):WaitForChild("ControlModule"))
+
+    local bv = Instance.new("BodyVelocity")
+    bv.Name = velocityHandlerName
+    bv.Parent = hrp
+    bv.MaxForce = v3inf
+    bv.Velocity = Vector3.new()
+
+    local bg = Instance.new("BodyGyro")
+    bg.Name = gyroHandlerName
+    bg.Parent = hrp
+    bg.MaxTorque = v3inf
+    bg.P = 1000
+    bg.D = 50
+
+    RunService.RenderStepped:Connect(function()
+        if FLYING then
+            local VelocityHandler = hrp:FindFirstChild(velocityHandlerName)
+            local GyroHandler = hrp:FindFirstChild(gyroHandlerName)
+            if VelocityHandler and GyroHandler then
+                GyroHandler.CFrame = camera.CFrame
+                local direction = controlModule:GetMoveVector()
+                VelocityHandler.Velocity =
+                    (camera.CFrame.RightVector * direction.X * iyflyspeed) +
+                    (-camera.CFrame.LookVector * direction.Z * iyflyspeed)
+            end
+        end
+    end)
+end
+
+enableFlying()
+
+-- Scan bonds
 print("=== Starting map scan ===")
 local scanTarget = CFrame.new(-424.448975, 26.055481, -49040.6562)
-local scanSteps  = 50
-for i = 1, scanSteps do
-    hrp.CFrame = hrp.CFrame:Lerp(scanTarget, i/scanSteps)
+for i = 1, 50 do
+    hrp.CFrame = hrp.CFrame:Lerp(scanTarget, i / 50)
     task.wait(0.3)
     recordBonds()
     task.wait(0.1)
@@ -159,54 +178,29 @@ hrp.CFrame = scanTarget
 task.wait(0.3)
 recordBonds()
 
-print(("➲ %d Bonds found"):format(#bondData))
+print(("→ %d Bonds found"):format(#bondData))
 if #bondData == 0 then
-    warn("Couldn't find Bonds.")
+    warn("No bonds found")
     return
 end
 
--- Seat logic
-local chair = Workspace:WaitForChild("RuntimeItems"):FindFirstChild("Chair")
-assert(chair and chair:FindFirstChild("Seat"), "Chair.Seat not found")
-local seat = chair.Seat
-seat:Sit(humanoid)
-task.wait(0.2)
-local seatWorks = (humanoid.SeatPart == seat)
-
--- Collect bonds
+-- Fly to each bond
 for idx, entry in ipairs(bondData) do
     print(("--- Bond %d/%d ---"):format(idx, #bondData))
-    local targetPos = entry.pos + Vector3.new(0, 2, 0)
-
-    if seatWorks then
-        seat:PivotTo(CFrame.new(targetPos))
-        task.wait(0.1)
-        if humanoid.SeatPart ~= seat then
-            seat:Sit(humanoid)
-            task.wait(0.1)
-        end
-    else
-        hrp.CFrame = CFrame.new(targetPos)
-        task.wait(0.3)
-    end
+    local pos = entry.pos + Vector3.new(0, 2, 0)
+    chair:PivotTo(CFrame.new(pos))
+    task.wait(0.4)
 
     local ok, err = pcall(function()
         Activate:InvokeServer(entry.item)
     end)
     if not ok then
-        warn("InvokeServer error:", err)
+        warn("Failed to activate:", err)
     end
-
     task.wait(0.5)
-
-    if not entry.item.Parent then
-        print("Bond collected")
-    else
-        warn("Not collected – maybe timeout?")
-    end
 end
 
--- End round + teleport queue
+-- End
 humanoid:TakeDamage(999999)
 EndDecisionRemote:FireServer(false)
-queue_on_tp('loadstring(game:HttpGet("https://raw.githubusercontent.com/PenguinCre8te/Auto-bond-dead-rails/refs/heads/main/script.lua"))()')
+queue_on_tp('loadstring(game:HttpGet("https://raw.githubusercontent.com/Backwoodsix/Dead-rails-bond-test-/refs/heads/main/Lua"))()')
